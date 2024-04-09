@@ -1,0 +1,26 @@
+:root {
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+}
+
+.content {
+  padding: 2rem;
+  padding-top: 0rem;
+}
+
+.title {
+  width: 100;
+  text-align: center;
+}
+
+.path-button-pair {
+  display: flexbox;
+  flex-direction: column;
+}
+
+.box-row> :not(:first-child) {
+  margin-left: 1rem;
+}
