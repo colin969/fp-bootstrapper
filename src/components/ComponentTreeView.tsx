@@ -7,6 +7,7 @@ import { setSelected } from "../redux/state/stateSlice";
 import { RootState } from "../redux/store";
 import { Category } from "../types";
 import { Checkbox } from "./Checkbox";
+import { readableByteSize } from "../util";
 
 enum NodeState {
   CHECKED,
@@ -63,7 +64,7 @@ export function ComponentsTreeView() {
             <Checkbox
               disabled={required.includes(component.id)}
               checked={selected.includes(component.id) || required.includes(component.id)}/>
-            {component.name}
+            {`${component.name} - ${readableByteSize(component.install_size)}`}
           </div>
         );
       }
@@ -173,27 +174,6 @@ export function ComponentsTreeView() {
       {catRenders.map(c => c.render)}
     </div>
   );
-}
-
-
-const thresh = 1024;
-
-function readableByteSize(bytes: number) {
-  if (Math.abs(bytes) < thresh) {
-    return bytes + ' B';
-  }
-
-  const units = ['KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB'];
-  let u = -1;
-  const r = 10**1;
-
-  do {
-    bytes /= thresh;
-    ++u;
-  } while (Math.round(Math.abs(bytes) * r) / r >= thresh && u < units.length - 1);
-
-
-  return bytes.toFixed(1) + ' ' + units[u];
 }
 
 type ArrowIconProps = {

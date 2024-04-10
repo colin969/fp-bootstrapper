@@ -8,6 +8,7 @@ export enum View {
   SETUP = "SETUP",
   SETUPSELECT = "SETUPSELECT",
   INSTALLATION = "INSTALLATION",
+  FINISHED = "FINISHED",
 }
 
 export type OsConfig = {

@@ -22,6 +22,7 @@ pub enum View {
     SETUP,
     SETUPSELECT,
     INSTALLATION,
+    FINISHED,
 }
 
 // Create a custom Error that we can return in Results
@@ -85,7 +86,7 @@ async fn set_installation_path(window: Window, app_state: State<'_, Arc<Mutex<Ap
 #[tauri::command]
 async fn change_view(window: Window, app_state: State<'_, Arc<Mutex<AppState>>>, view: View) -> Result<(), Error> {
     let mut state = app_state.lock().await;
-    state.change_view(view).await?;
+    state.change_view(view, window.clone()).await?;
     sync_state(&window, state.clone()).unwrap();
     Ok(())
 }
@@ -116,6 +117,13 @@ async fn unselect_component(window: Window, app_state: State<'_, Arc<Mutex<AppSt
     state.components.unselect(&id);
     sync_selected(&window, state.components.selected.clone()).unwrap();
     Ok(())
+}
+
+#[tauri::command]
+async fn installation_finished_back(window: Window, app_state: State<'_, Arc<Mutex<AppState>>>, _: i32) -> Result<AppState, Error> {
+    let mut state = app_state.lock().await;
+    state.change_view(View::FINISHED, window.clone()).await?;
+    Ok(state.clone())
 }
 
 #[tauri::command]
@@ -183,6 +191,7 @@ fn main() {
             find_component_dependencies,
             select_component,
             unselect_component,
+            installation_finished_back,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

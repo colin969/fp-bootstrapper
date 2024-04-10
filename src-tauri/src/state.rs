@@ -1,6 +1,12 @@
-use std::{collections::HashSet, path::Path};
+use std::{collections::HashSet, path::Path, sync::{Arc, Mutex}, time::{Duration, Instant}};
 
+use crc32fast::Hasher;
 use serde::{Deserialize, Serialize};
+use tauri::{async_runtime::{spawn, JoinHandle}, Window};
+use futures::StreamExt;
+use tokio::io::AsyncWriteExt;
+use walkdir::WalkDir;
+use zip::ZipArchive;
 
 use crate::{config::AppConfig, Error, OperatingSystem, View};
 
@@ -22,6 +28,8 @@ pub(crate) struct AppState {
     pub installation_channel: String,
     pub components: ComponentList,
     pub config: AppConfig,
+    #[serde(skip)]
+    pub task_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl Default for AppState {
@@ -35,8 +43,129 @@ impl Default for AppState {
             installation_channel: "Stable".to_owned(),
             components: ComponentList::default(),
             config: AppConfig::default(),
+            task_handle: Arc::new(Mutex::new(None)),
         };
     }
+}
+
+fn remove_readonly_attr(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::fs::MetadataExt;
+        let metadata = fs::metadata(path)?;
+        if metadata.file_attributes() & 0x1 != 0 { // FILE_ATTRIBUTE_READONLY
+            let mut options = OpenOptions::new();
+            options.write(true).custom_flags(0x80000000); // FILE_ATTRIBUTE_NORMAL
+            let _file = options.open(path)?;
+            // Opening the file with FILE_ATTRIBUTE_NORMAL is enough to clear the readonly attribute.
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(path)?.permissions();
+        permissions.set_mode(0o644);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+    Ok(())
+}
+
+pub async fn install_component(comp: &Component, base_url: &str, base_dir: &str, window: &Window, state: &mut DownloadState) -> Result<(), Box<dyn std::error::Error>> {
+    let mut temp_str = base_dir.to_owned() + "/Temp/";
+    let temp_str_cpy = temp_str.clone();
+    let temp_dir_path = Path::new(&temp_str_cpy);
+    if let Some(path) = &comp.path {
+        temp_str.push_str(path);
+    }
+    let base_dir_temp = Path::new(&temp_str);
+        
+    // Ensure base_dir temp exists
+    std::fs::create_dir_all(&base_dir_temp)?;
+
+    // Download each component zip to a file, then extract
+    let url = base_url.to_owned() + &comp.id + ".zip";
+    let file = download_file_tmp(&url, &comp.hash.to_uppercase(), window, state).await?;
+
+    // Extract to temp folder
+    let mut archive = ZipArchive::new(file)?;
+
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)?;
+        let outpath = match file.enclosed_name() {
+            Some(path) => base_dir_temp.join(path),
+            None => continue,
+        };
+
+        if (&*file.name()).ends_with('/') {
+            // Create a directory if the file is a directory
+            std::fs::create_dir_all(&outpath)?;
+        } else {
+            // Ensure the file's parent directory exists
+            if let Some(p) = outpath.parent() {
+                if !p.exists() {
+                    std::fs::create_dir_all(&p)?;
+                }
+            }
+
+            // Write the file content
+            let mut outfile = std::fs::File::create(&outpath)?;
+            std::io::copy(&mut file, &mut outfile)?;
+        }
+    }
+
+    // Move files from Temp to main dir
+
+    for entry in WalkDir::new(temp_dir_path).into_iter().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let relative_path = path.strip_prefix(temp_dir_path)?;
+        let dest_path = Path::new(base_dir).join(relative_path);
+
+        if path.is_dir() {
+            std::fs::create_dir_all(&dest_path)?;
+        } else if path.is_file() {
+            let _ = remove_readonly_attr(path); // We don't actually care about the result, because not all files behave well.
+            let _ = remove_readonly_attr(&dest_path); // If it errors, the copy error will present itself soon and bubble up
+            std::fs::copy(path, &dest_path)?;
+        }
+    }
+
+    std::fs::remove_dir_all(temp_dir_path)?;
+    std::fs::create_dir_all(temp_dir_path)?;
+    
+    Ok(())
+}
+
+pub async fn download_file_tmp(url: &str, crc32_hash: &str, window: &Window, state: &mut DownloadState) -> Result<std::fs::File, Box<dyn std::error::Error>> {
+    let mut tmp_file = tokio::fs::File::from(tempfile::tempfile()?);
+    let mut byte_stream = reqwest::get(url).await?.bytes_stream();
+    let mut hasher = Hasher::new();
+    let mut bytes_downloaded = 0;
+    let start_time = Instant::now();
+    let mut last_call = Instant::now();
+
+    while let Some(item) = byte_stream.next().await {
+        let chunk = item?;
+        bytes_downloaded += chunk.len();
+        if last_call.elapsed() >= Duration::from_millis(200) {
+            state.download_rate = (bytes_downloaded as f64) / start_time.elapsed().as_secs_f64();
+            window.emit("download_state", state.clone()).unwrap();
+            last_call = Instant::now();
+        }
+        
+        hasher.update(&chunk);
+        tmp_file.write_all(&chunk).await?;
+    }
+    tmp_file.flush().await?;
+
+    let calculated_hash = hasher.finalize();
+    let calculated_hash_str = format!("{:08x}", calculated_hash);
+    if calculated_hash_str.to_uppercase() != crc32_hash {
+        let msg = format!("Download failed, hash mismatch: Got {:?} expected {:?} - URL: {:?}", calculated_hash_str.to_uppercase(), crc32_hash, url);
+        return Err(Box::new(crate::Error::GeneralError(msg)));
+    }
+
+    let t = tmp_file.try_into_std();
+    Ok(t.map_err(|_| crate::Error::GeneralError("Unknown".to_owned()))?)
 }
 
 impl AppState {
@@ -60,7 +189,43 @@ impl AppState {
         }
     }
 
-    pub async fn change_view(&mut self, view: View) -> Result<(), Error> {
+    pub async fn start_downloader(&mut self, window: tauri::Window) {
+        let components_ref = get_all_components(&self.components);
+        let components: Vec<Component> = components_ref.iter().map(|c| (*c).clone()).collect();
+        let base_url = self.components.url.clone();
+        let base_dir = self.installation_path.clone();
+
+        let mut handle = self.task_handle.lock().unwrap(); // Lock the handle in state
+
+        *handle = Some(spawn(async move {
+            let mut download_state = DownloadState::default();
+
+            download_state.total_components = components.len();
+            download_state.component_number = 0;
+            download_state.total_size = components.iter().map(|c| c.download_size).sum();
+
+            for comp in components {
+                download_state.download_rate = 0.0;
+                download_state.component_number += 1;
+                download_state.current = Some(comp.clone());
+                download_state.stage = "Downloading".to_owned();
+                window.emit("download_state", download_state.clone()).unwrap();
+                match install_component(&comp, &base_url, &base_dir, &window, &mut download_state).await {
+                    Ok(_) => (),
+                    Err(e) => {
+                        window.emit("fatal_error", e.to_string()).unwrap();
+                        return;
+                    },
+                }
+                download_state.total_downloaded += comp.download_size;
+            }
+            window.emit("installation_finished", 0).unwrap();
+        }));
+
+        drop(handle); // Drop the lock
+    }
+
+    pub async fn change_view(&mut self, view: View, window: tauri::Window) -> Result<(), Error> {
         match self.view {
             View::SETUP => {
                 match view {
@@ -116,20 +281,30 @@ impl AppState {
                             self.components = comp;
                         }
                     }
-                    _ => (),
+                    _ => {
+                        return Err(crate::Error::GeneralError("Invalid view transition".to_owned()));
+                    },
                 }
             },
             View::SETUPSELECT => {
                 match view {
-                    View::SETUP => {
-                        self.view = View::SETUP;
-                    },
+                    View::SETUP => (),
                     View::INSTALLATION => {
-                        self.view = View::INSTALLATION;
+                        self.start_downloader(window).await;
                     },
-                    _ => ()
+                    _ => {
+                        return Err(crate::Error::GeneralError("Invalid view transition".to_owned()));
+                    }
                 }
             },
+            View::INSTALLATION => {
+                match view {
+                    View::FINISHED => (),
+                    _ => {
+                        return Err(crate::Error::GeneralError("Invalid view transition".to_owned()));
+                    }
+                }
+            }
             _ => (),
         }
 
@@ -210,7 +385,7 @@ struct Category {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-struct Component {
+pub struct Component {
     id: String,
     #[serde(alias = "title")]
     name: String,
@@ -483,4 +658,30 @@ fn get_all_components<'a>(list: &'a ComponentList) -> Vec<&'a Component> {
     let mut components = Vec::new();
     collect_components(&list.categories, &mut components);
     components
+}
+
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct DownloadState {
+    pub download_rate: f64,
+    pub total_size: u64,
+    pub total_downloaded: u64,
+    pub total_components: usize,
+    pub component_number: i32,
+    pub current: Option<Component>,
+    pub stage: String,
+}
+
+impl Default for DownloadState {
+    fn default() -> Self {
+        DownloadState {
+            download_rate: 0.0,
+            total_size: 0,
+            total_downloaded: 0,
+            total_components: 0,
+            component_number: 0,
+            current: None,
+            stage: String::new(),
+        }
+    }
 }

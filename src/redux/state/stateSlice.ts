@@ -1,5 +1,5 @@
 import { PayloadAction, createSlice } from '@reduxjs/toolkit';
-import { AppState, OperatingSystem, View } from '../../types';
+import { AppState, Component, OperatingSystem, View } from '../../types';
 
 const initialState: AppState = {
   operating_system: OperatingSystem.LINUX,
@@ -13,12 +13,37 @@ const initialState: AppState = {
   },
 }
 
+export type DownloadState = {
+  download_rate: number;
+  total_size: number,
+  total_downloaded: number,
+  total_components: number,
+  component_number: number,
+  current?: Component,
+  stage: String,
+}
+
+export type GlobalState = {
+  appState: AppState,
+  busy: boolean,
+  downloadState: DownloadState,
+};
+
 export const stateSlice = createSlice({
   name: 'state',
   initialState: {
     appState: initialState,
     busy: false,
-  },
+    downloadState: {
+      download_rate: 0,
+      total_size: 0,
+      total_downloaded: 0,
+      component_number: 0,
+      total_components: 0,
+      current: undefined,
+      stage: 'Downloading',
+    }
+  } as GlobalState,
   reducers: {
     setState: (state, action: PayloadAction<AppState>) => {
       Object.assign(state.appState, action.payload);
@@ -29,9 +54,12 @@ export const stateSlice = createSlice({
     setBusy: (state, action: PayloadAction<boolean>) => {
       state.busy = action.payload;
     },
+    setDownloadState: (state, action: PayloadAction<DownloadState>) => {
+      state.downloadState = action.payload;
+    },
   },
 });
 
-export const { setState, setSelected, setBusy } = stateSlice.actions;
+export const { setState, setSelected, setBusy, setDownloadState } = stateSlice.actions;
 
 export default stateSlice.reducer;
