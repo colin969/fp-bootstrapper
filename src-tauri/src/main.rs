@@ -21,6 +21,7 @@ enum OperatingSystem {
 pub enum View {
     SETUP,
     SETUPSELECT,
+    INSTALLATION,
 }
 
 // Create a custom Error that we can return in Results

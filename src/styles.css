@@ -6,7 +6,20 @@
   -webkit-text-size-adjust: 100%;
 }
 
+html {
+  height: 100%;
+}
+
+body {
+  height: 100%;
+}
+
+#root {
+  height: 100%;
+}
+
 .content {
+  height: 100%;
   padding: 2rem;
   padding-top: 0rem;
 }
@@ -25,3 +38,16 @@
   margin-left: 1rem;
 }
 
+.vertical-box {
+  flex-direction: column;
+  display: flex;
+  height: 100%;
+}
+
+.filler {
+  flex-grow: 1;
+}
+
+.scroll-box {
+  overflow-y: auto;
+}

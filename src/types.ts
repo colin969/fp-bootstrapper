@@ -7,6 +7,7 @@ export enum OperatingSystem {
 export enum View {
   SETUP = "SETUP",
   SETUPSELECT = "SETUPSELECT",
+  INSTALLATION = "INSTALLATION",
 }
 
 export type OsConfig = {
@@ -19,11 +20,6 @@ export type AppConfig = {
   windows?: OsConfig;
   linux?: OsConfig;
   macos?: OsConfig;
-}
-
-export type FrontState = {
-  state: AppState;
-  setState: (state: AppState) => void;
 }
 
 export type AppState = {

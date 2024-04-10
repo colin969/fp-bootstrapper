@@ -20,7 +20,7 @@ type NodeRender = {
 }
 
 export function ComponentsTreeView() {
-  const appState = useSelector((state: RootState) => state.state);
+  const { appState } = useSelector((state: RootState) => state.state);
   const { selected, required } = appState.components;
   const dispatch = useDispatch();
   const [expanded, setExpanded] = useState<string[]>([]);

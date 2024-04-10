@@ -118,8 +118,19 @@ impl AppState {
                     }
                     _ => (),
                 }
-            }
-            View::SETUPSELECT => todo!(),
+            },
+            View::SETUPSELECT => {
+                match view {
+                    View::SETUP => {
+                        self.view = View::SETUP;
+                    },
+                    View::INSTALLATION => {
+                        self.view = View::INSTALLATION;
+                    },
+                    _ => ()
+                }
+            },
+            _ => (),
         }
 
         // No error returned, so assume it's safe to change view

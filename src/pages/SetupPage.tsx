@@ -2,17 +2,15 @@ import { Box, Button, FormControl, FormControlLabel, FormLabel, Radio, RadioGrou
 import { invoke } from "@tauri-apps/api";
 import { message, open } from '@tauri-apps/api/dialog';
 import { useCallback, useState } from "react";
-import { useSelector } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
 import { RootState } from "../redux/store";
 import { View, osToName } from "../types";
+import { setBusy } from "../redux/state/stateSlice";
 
-export type SetupPageProps = {
-  setBusy: (busy: boolean) => void;
-}
-
-export function SetupPage(props: SetupPageProps) {
-  const appState = useSelector((state: RootState) => state.state);
+export function SetupPage() {
+  const { appState } = useSelector((state: RootState) => state.state);
   const [installPath, setInstallPath] = useState(appState.installation_path);
+  const dispatch = useDispatch();
 
   const showSelectDialog = useCallback(() => {
     open({
@@ -55,13 +53,13 @@ export function SetupPage(props: SetupPageProps) {
         </Box>
         <Box sx={{ marginTop: '20px' }}>
           <Button variant='contained' onClick={() => {
-            props.setBusy(true);
+            dispatch(setBusy(true));
             invoke('change_view', { view: View.SETUPSELECT })
             .catch((error) => {
               message(error, 'Error');
             })
             .finally(() => {
-              props.setBusy(false);
+              dispatch(setBusy(false));
             });
           }}>Next</Button>
         </Box>

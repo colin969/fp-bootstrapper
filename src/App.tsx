@@ -9,12 +9,12 @@ import { SetupPage } from './pages/SetupPage';
 import { setSelected, setState } from './redux/state/stateSlice';
 import { RootState } from './redux/store';
 import { AppState, View } from './types';
+import { InstallationPage } from './pages/InstallationPage';
 
 function App() {
-  const appState = useSelector((state: RootState) => state.state);
+  const { appState, busy } = useSelector((state: RootState) => state.state);
   const dispatch = useDispatch();
   const [fatalError, setFatalError] = useState<string>("");
-  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     // Listen for any state changes
@@ -41,10 +41,13 @@ function App() {
   const renderView = (): JSX.Element => {
     switch(appState.view) {
       case View.SETUP: {
-        return <SetupPage setBusy={setBusy}/>;
+        return <SetupPage/>;
       }
       case View.SETUPSELECT: {
         return <SetupComponentsPage/>
+      }
+      case View.INSTALLATION: {
+        return <InstallationPage />
       }
       default: {
         return <>

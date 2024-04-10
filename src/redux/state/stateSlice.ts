@@ -15,17 +15,23 @@ const initialState: AppState = {
 
 export const stateSlice = createSlice({
   name: 'state',
-  initialState,
+  initialState: {
+    appState: initialState,
+    busy: false,
+  },
   reducers: {
     setState: (state, action: PayloadAction<AppState>) => {
-      Object.assign(state, action.payload);
+      Object.assign(state.appState, action.payload);
     },
     setSelected: (state, action: PayloadAction<string[]>) => {
-      state.components.selected = action.payload;
+      state.appState.components.selected = action.payload;
+    },
+    setBusy: (state, action: PayloadAction<boolean>) => {
+      state.busy = action.payload;
     },
   },
 });
 
-export const { setState, setSelected } = stateSlice.actions;
+export const { setState, setSelected, setBusy } = stateSlice.actions;
 
 export default stateSlice.reducer;
