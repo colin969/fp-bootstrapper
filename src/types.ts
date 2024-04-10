@@ -55,21 +55,20 @@ export type ComponentList = {
   url: string;
   categories: Category[];
   selected: string[];
+  required: string[];
 }
 
 export type Category = {
   id: string;
-  real_id: string;
-  title: string;
+  name: string;
   description: string;
-  subcategories?: Category[]; // Optional to account for nested categories
+  subcategories: Category[]; // Optional to account for nested categories
   components: Component[];
 }
 
 export type Component = {
   id: string;
-  real_id: string;
-  title: string;
+  name: string;
   description: string;
   date_modified: string;
   download_size: number;

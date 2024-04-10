@@ -83,33 +83,22 @@ impl AppState {
                         }
 
                         // Find the correct source url
-                        let xml_url = match self.installation_target {
-                            OperatingSystem::LINUX => self
-                                .config
-                                .linux
-                                .as_ref()
-                                .and_then(|linux| linux.channels.get(&self.installation_channel))
-                                .cloned()
-                                .unwrap_or_default(),
-
-                            OperatingSystem::WINDOWS => self
-                                .config
-                                .windows
-                                .as_ref()
-                                .and_then(|windows| {
-                                    windows.channels.get(&self.installation_channel)
-                                })
-                                .cloned()
-                                .unwrap_or_default(),
-
-                            OperatingSystem::MACOS => self
-                                .config
-                                .macos
-                                .as_ref()
-                                .and_then(|macos| macos.channels.get(&self.installation_channel))
-                                .cloned()
-                                .unwrap_or_default(),
+                        let os_config_opt = match self.installation_target {
+                            OperatingSystem::LINUX => self.config.linux.clone(),
+                            OperatingSystem::WINDOWS => self.config.windows.clone(),
+                            OperatingSystem::MACOS => self.config.macos.clone(),
                         };
+
+                        if os_config_opt.is_none() {
+                            return Err(Error::GeneralError(
+                                "Selected platform does not have an installation candidate".to_owned(),
+                            ));
+                        }
+                        let os_config = os_config_opt.unwrap();
+
+                        let xml_url = os_config.channels.get(&self.installation_channel)
+                            .cloned()
+                            .unwrap_or_default();
 
                         // If no source url found, channel does not exist
                         if xml_url.is_empty() {
@@ -123,8 +112,7 @@ impl AppState {
                             let mut comp: ComponentList = serde_xml_rs::from_str(&data)
                                 .map_err(|e| Error::GeneralError(e.to_string()))?;
                             // Calculate required values and mark as selected
-                            comp.fix_ids();
-                            comp.mark_required();
+                            comp.setup();
                             self.components = comp;
                         }
                     }
@@ -159,6 +147,19 @@ fn installation_path_is_safe(dir: &str) -> std::io::Result<bool> {
     }
 }
 
+fn deserialize_bool<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: String = Deserialize::deserialize(deserializer)?;
+
+    match s.as_str() {
+        "1" => Ok(true),
+        "0" => Ok(false),
+        _ => Ok(false),
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ComponentList {
     #[serde(rename = "url", default)]
@@ -166,7 +167,9 @@ pub struct ComponentList {
     #[serde(rename = "categories", alias = "category", default)]
     categories: Vec<Category>,
     #[serde(default)]
-    selected: Vec<String>,
+    pub selected: Vec<String>,
+    #[serde(default)]
+    pub required: Vec<String>,
 }
 
 impl Default for ComponentList {
@@ -175,6 +178,7 @@ impl Default for ComponentList {
             url: "Example Component List".to_owned(),
             categories: vec![],
             selected: vec![],
+            required: vec![],
         }
     }
 }
@@ -182,23 +186,23 @@ impl Default for ComponentList {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Category {
     id: String,
-    #[serde(default)]
-    real_id: String,
-    title: String,
+    #[serde(alias = "title")]
+    name: String,
     description: String,
     // This field can either be a nested category or a component. Depending on your XML structure and needs, you might need to adjust the handling.
     #[serde(alias = "category", default)]
     subcategories: Vec<Category>,
     #[serde(alias = "component")]
     components: Vec<Component>,
+    #[serde(default)]
+    required: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Component {
     id: String,
-    #[serde(default)]
-    real_id: String,
-    title: String,
+    #[serde(alias = "title")]
+    name: String,
     description: String,
     #[serde(alias = "date-modified")]
     date_modified: String,
@@ -209,7 +213,7 @@ struct Component {
     path: Option<String>,
     hash: String,
     depends: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_bool")]
     required: bool,
     #[serde(default)]
     installed: bool,
@@ -224,7 +228,7 @@ fn update_ids_in_category(
     if new_working_id.starts_with("-") {
         new_working_id.remove(0);
     }
-    category.real_id = new_working_id.clone();
+    category.id = new_working_id.clone();
 
     for subcat in &mut category.subcategories {
         update_ids_in_category(subcat, &new_working_id);
@@ -232,32 +236,92 @@ fn update_ids_in_category(
 
     // Update all components
     for comp in &mut category.components {
-        comp.real_id = new_working_id.clone() + "-" + &comp.id;
+        comp.id = new_working_id.clone() + "-" + &comp.id;
     }
 }
 
-
 impl ComponentList {
-    pub fn fix_ids(&mut self) {
-        for cat in &mut self.categories {
-            update_ids_in_category(cat, "");
+    pub fn setup(&mut self) {
+        let mut required = vec![];
+        for category in &mut self.categories {
+            // Update all IDs to be correct inside category
+            update_ids_in_category(category, ""); 
         }
+        for category in self.categories.iter() {
+            // Add to the list of required components and categories
+            self.find_required(category, &mut required);
+        }
+        required.sort();
+        required.dedup();
+        self.required = required.clone();
     }
 
+    fn find_required(
+        &self,
+        category: &Category,
+        list: &mut Vec<String>
+    ) -> bool {
+        let mut is_required = true;
+        // Find non-required comps
+        for component in category.components.iter() {
+            if component.required {
+                // Add all dependants
+                let mut dependencies = self.find_dependencies(&component.id);
+                list.append(&mut dependencies);
+            } else {
+                is_required = false;
+            }
+        }
+        for subcat in category.subcategories.iter() {
+            if subcat.required {
+                // If required itself, add all child components
+                let mut subcat_comps = vec![];
+                collect_category_components(subcat, &mut subcat_comps);
+                for comp in subcat_comps {
+                    list.push(comp.id.clone());
+                }
+                list.push(subcat.id.clone());
+            } else {
+                // If the category isn't stated required, then we'll decide by checking if all children are required instead
+                let required = self.find_required(subcat, list);
+                if !required {
+                    is_required = false;
+                }
+            }
+     
+        }
+        // Finally can add to list
+        if is_required {
+            list.push(category.id.clone());
+        }
+        is_required
+    }    
 
-    pub fn mark_required(&mut self) {
-        let _ = get_all_components(&self);
-    
-    }
+    // pub fn mark_required(&mut self, id: &str) {
+    //     let mut required = vec![];
+    //     let components = get_all_components(&self);
+
+    //     if components.iter().find(|&c| c.id == id).is_some() {
+    //         // Is a component
+    //         self.find_dependants_recursive(id, &components, &mut required);
+    //         required.push(id.to_owned());
+    //     } else if let Some(category) = self.find_category_by_id(id) {
+    //         // Is a category
+    //         let mut category_components = vec![];
+    //         collect_category_components(category, &mut category_components);
+    //         for comp in category_components.iter() {
+    //             self.find_dependants_recursive(&comp.id, &components, &mut required);
+    //             required.push(comp.id.clone());
+    //         }
+    //     }
+
+    //     self.required.append(&mut required);
+    //     self.required.sort();
+    //     self.required.dedup();
+    // }
 
     pub fn select(&mut self, id: &str) {
-        let mut dependencies: Vec<String> = Vec::new();
-        let components = get_all_components(&self);
-
-        if let Some(component) = components.iter().find(|&c| c.id == id) {
-            self.find_dependencies_recursive(component, &components, &mut dependencies);
-        }
-        dependencies.push(id.to_owned());
+        let mut dependencies = self.find_dependencies(id);
 
         self.selected.append(&mut dependencies);
         self.selected.sort();
@@ -265,15 +329,12 @@ impl ComponentList {
     }
 
     pub fn unselect(&mut self, id: &str) {
-        let mut dependants: Vec<String> = Vec::new();
-        let components = get_all_components(&self);
+        let dependants = self.find_dependants(id);
 
-        self.find_dependants_recursive(id, &components, &mut dependants);
-        dependants.push(id.to_owned());
         // Should be faster?
         let dependants_set: HashSet<String> = dependants.into_iter().collect();
 
-        self.selected.retain(|e| !dependants_set.contains(e));
+        self.selected.retain(|e| !dependants_set.contains(e)); // Do not remove required component
 
     }
 
@@ -281,10 +342,22 @@ impl ComponentList {
         let mut dependants: Vec<String> = Vec::new();
         let components = get_all_components(&self);
 
-        // Use a helper function to recursively find dependants
-        self.find_dependants_recursive(id, &components, &mut dependants);
+        if components.iter().find(|&c| c.id == id).is_some() {
+            // Is a component
+            self.find_dependants_recursive(id, &components, &mut dependants);
+            dependants.push(id.to_owned());
+        } else if let Some(category) = self.find_category_by_id(id) {
+            // Is a category
+            let mut category_components = vec![];
+            collect_category_components(category, &mut category_components);
+            for comp in category_components.iter() {
+                self.find_dependants_recursive(&comp.id, &components, &mut dependants);
+                dependants.push(comp.id.clone());
+            }
+        }
 
         // Since recursion can add duplicates, ensure unique elements
+        dependants.retain(|e| !self.required.contains(e)); // Remove all required components from dependants list
         dependants.sort();
         dependants.dedup();
 
@@ -316,11 +389,20 @@ impl ComponentList {
         let mut dependencies: Vec<String> = Vec::new();
         let components = get_all_components(&self);
 
-        // Initial search for the component by id and if found, start finding its dependencies
         if let Some(component) = components.iter().find(|&c| c.id == id) {
+            // Is a component
             self.find_dependencies_recursive(component, &components, &mut dependencies);
+            // Always select self as well as dependencies
+            dependencies.push(id.to_owned());
+        } else if let Some(category) = self.find_category_by_id(id) {
+            // Is a category
+            let mut category_components = vec![];
+            collect_category_components(category, &mut category_components);
+            for comp in category_components.iter() {
+                self.find_dependencies_recursive(comp, &components, &mut dependencies);
+                dependencies.push(comp.id.clone());
+            }
         }
-
         // Since recursion might add duplicates, ensure unique elements
         dependencies.sort();
         dependencies.dedup();
@@ -350,17 +432,38 @@ impl ComponentList {
             }
         }
     }
+
+    // Function to find a category by ID and return a reference to it
+    fn find_category_by_id(&self, id: &str) -> Option<&Category> {
+        self.find_category_recursive(&self.categories, id)
+    }
+
+    fn find_category_recursive<'a>(&'a self, categories: &'a [Category], id: &str) -> Option<&'a Category> {
+        for category in categories {
+            if category.id == id {
+                return Some(category);
+            }
+            if let Some(subcategory) = self.find_category_recursive(&category.subcategories, id) {
+                return Some(subcategory);
+            }
+        }
+        None
+    }
+}
+
+fn collect_category_components<'a>(category: &'a Category, components: &mut Vec<&'a Component>) {
+    for subcat in category.subcategories.iter() {
+        collect_category_components(subcat, components);
+    }
+    for component in &category.components {
+        components.push(component);
+    }
 }
 
 fn collect_components<'a>(categories: &'a [Category], components: &mut Vec<&'a Component>) {
     for category in categories {
         // Add all components in the current category to the components vector
-        for component in &category.components {
-            components.push(component);
-        }
-
-        // Recursively process subcategories
-        collect_components(&category.subcategories, components);
+        collect_category_components(&category, components);
     }
 }
 

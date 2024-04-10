@@ -105,7 +105,7 @@ async fn find_component_dependencies(app_state: State<'_, Arc<Mutex<AppState>>>,
 async fn select_component(window: Window, app_state: State<'_, Arc<Mutex<AppState>>>, id: String) -> Result<(), Error> {
     let mut state = app_state.lock().await;
     state.components.select(&id);
-    sync_state(&window, state.clone()).unwrap();
+    sync_selected(&window, state.components.selected.clone()).unwrap();
     Ok(())
 }
 
@@ -113,7 +113,7 @@ async fn select_component(window: Window, app_state: State<'_, Arc<Mutex<AppStat
 async fn unselect_component(window: Window, app_state: State<'_, Arc<Mutex<AppState>>>, id: String) -> Result<(), Error> {
     let mut state = app_state.lock().await;
     state.components.unselect(&id);
-    sync_state(&window, state.clone()).unwrap();
+    sync_selected(&window, state.components.selected.clone()).unwrap();
     Ok(())
 }
 
@@ -124,6 +124,10 @@ async fn init_process(window: Window, app_state: State<'_, Arc<Mutex<AppState>>>
         fatal_error(&window, &fe).unwrap();
     }
     Ok(state.clone())
+}
+
+fn sync_selected(window: &Window, selected: Vec<String>) -> Result<(), tauri::Error> {
+    window.emit("sync_selected", selected)
 }
 
 fn sync_state(window: &Window, state: AppState) -> Result<(), tauri::Error> {

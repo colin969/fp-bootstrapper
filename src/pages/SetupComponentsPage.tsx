@@ -1,16 +1,16 @@
-import { useContext } from "react";
-import { StateContext } from "../StateContext";
-import { ComponentsTreeView } from "../components/ComponentTreeView";
 import { Box } from "@mui/material";
+import { useSelector } from "react-redux";
+import { ComponentsTreeView } from "../components/ComponentTreeView";
+import { RootState } from "../redux/store";
 
 export function SetupComponentsPage() {
-  const { state } = useContext(StateContext);
+  const appState = useSelector((state: RootState) => state.state);
 
   return (
     <>
       <h1 className='title'>Installation Options</h1>
       <Box>
-        <ComponentsTreeView list={state.components}/>
+        <ComponentsTreeView />
       </Box>
     </>
   )

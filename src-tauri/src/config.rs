@@ -21,7 +21,7 @@ pub(crate) struct OsConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         let mut default_channels = HashMap::new();
-        default_channels.insert("Stable".to_owned(), "https://nexus-dev.unstable.life/repository/components-stable/components.xml".to_owned());
+        default_channels.insert("Stable".to_owned(), "https://nexus-dev.unstable.life/repository/components-test/components.xml".to_owned());
 
         Self {
             name: "Flashpoint Launcher".to_owned(),

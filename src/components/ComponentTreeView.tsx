@@ -1,120 +1,180 @@
-import { SimpleTreeView, TreeItem } from "@mui/x-tree-view";
-import { Category, Component, ComponentList } from "../types";
-import { useContext, useMemo } from "react";
-import { Checkbox, FormControlLabel } from "@mui/material";
-import { ask, message } from "@tauri-apps/api/dialog";
 import { invoke } from "@tauri-apps/api";
-import { StateContext } from "../StateContext";
+import { ask, message } from "@tauri-apps/api/dialog";
+import { MouseEventHandler, useCallback, useState } from "react";
+import { IoMdArrowDropright } from "react-icons/io";
+import { useDispatch, useSelector } from "react-redux";
+import { setSelected } from "../redux/state/stateSlice";
+import { RootState } from "../redux/store";
+import { Category } from "../types";
+import { Checkbox } from "./Checkbox";
 
-export type ComponentsTreeViewProps = {
-  list: ComponentList;
+enum NodeState {
+  CHECKED,
+  INDETERMINATE,
+  UNCHECKED
 }
 
-export function ComponentsTreeView(props: ComponentsTreeViewProps) {
-  const { setState, state } = useContext(StateContext);
+type NodeRender = {
+  render: JSX.Element;
+  combinedState: NodeState;
+}
 
-  const toggleComponent = async (component: Component, checked: boolean) => {
+export function ComponentsTreeView() {
+  const appState = useSelector((state: RootState) => state.state);
+  const { selected, required } = appState.components;
+  const dispatch = useDispatch();
+  const [expanded, setExpanded] = useState<string[]>([]);
+  console.log(required);
+
+  const renderCategoryNode = useCallback((category: Category, level: number = 0): NodeRender => {
+    const isExpanded = expanded.includes(category.id);
+    let combinedState: NodeState = NodeState.CHECKED;
+    let totalSelected = 0;
+    const children: JSX.Element[] = [];
+    for (const subcat of category.subcategories) {
+      const nodeRender = renderCategoryNode(subcat, level + 1);
+      if (nodeRender.combinedState !== NodeState.UNCHECKED) {
+        totalSelected += 1;
+      }
+      if (nodeRender.combinedState !== NodeState.CHECKED) {
+        combinedState = NodeState.INDETERMINATE
+      }
+      if (isExpanded) {
+        children.push(nodeRender.render);
+      }
+    }
+    for (const component of category.components) {
+      const compSelected = selected.includes(component.id) || required.includes(component.id);
+      if (compSelected) {
+        totalSelected += 1;
+      } else {
+        combinedState = NodeState.INDETERMINATE;
+      }
+      if (isExpanded) {
+        children.push(
+          <div
+            id={component.id}
+            className="tree-node"
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleComponent(component.id);
+            }}
+            style={{marginLeft: `${(level + 2)}rem`}}>
+            <Checkbox
+              disabled={required.includes(component.id)}
+              checked={selected.includes(component.id) || required.includes(component.id)}/>
+            {component.name}
+          </div>
+        );
+      }
+    }
+    if (totalSelected === 0) {
+      combinedState = NodeState.UNCHECKED;
+    }
+    const render = (
+      <div
+        id={category.id}
+        className="tree-node"
+        style={{marginLeft: `${(level)}rem`}}
+        onClick={(event) => {
+          console.log('select cat');
+          event.stopPropagation();
+          // If CHECKED, 'false' for 'I do not want to be checked'
+          toggleComponent(category.id, combinedState !== NodeState.CHECKED);
+        }}
+        >
+        <ArrowIcon 
+          onClick={(event) => {
+            event.stopPropagation();
+            console.log('clicked ' + category.id);
+            const newExpanded = [...expanded];
+            const expId = newExpanded.findIndex(e => e === category.id);
+            if (expId > -1) {
+              newExpanded.splice(expId);
+            } else {
+              newExpanded.push(category.id);
+            }
+            setExpanded(newExpanded);
+          }}
+          isOpen={isExpanded}/>
+        <Checkbox
+          disabled={required.includes(category.id)}
+          indeterminate={combinedState === NodeState.INDETERMINATE}
+          checked={required.includes(category.id) || combinedState !== NodeState.UNCHECKED} />
+        {category.name}
+        {isExpanded && (
+          <>
+            {children}
+          </>
+        )}
+      </div>
+    )
+    return {
+      render,
+      combinedState
+    };
+  }, [expanded, selected, required]);
+
+  const toggleComponent = async (id: string, newState?: boolean): Promise<boolean> => {
+    console.log(id);
+    const checked = newState === undefined ? !selected.includes(id) : newState; // Desired checked state
     try {
       if (!checked) {
+        console.log('unselect');
         // unselecting, make sure we want to remove all dependants too
-        const dependants: Component[] = await invoke("find_component_dependants", { id: component.id });
+        let dependants: string[] = await invoke("find_component_dependants", { id });
+        console.log(dependants);
+        dependants = dependants.filter(d => d !== id && selected.includes(d));
         if (dependants.length > 0) {
           // Confirm before disabling
-          ask(`Unselecting "${component.title}" will also unselect ${dependants.length} other components (${dependants.map(c => c.title).join(', ')}). Is this okay?`)
+          ask(`Unselecting "${id}" will also unselect ${dependants.length} other components (${dependants.join(', ')}). Is this okay?`)
           .then((success) => {
             if (success) {
-              const newState = {...state};
-              const compIdx = newState.components.selected.findIndex(c => c === component.id);
-              if (compIdx > -1) {
-                newState.components.selected.splice(compIdx, 1);
-                setState(newState);
-                invoke('unselect_component', { id: component.id })
-                .catch((error) => {
-                  message(error, 'Error');
-                });
-              }
+              invoke('unselect_component', { id })
+              .catch((error) => {
+                message(error, 'Error');
+              });
+              return true;
             }
           })
           .catch((error) => {
             message(error, 'Error');
           });
         } else {
-          const newState = {...state};
-          const compIdx = newState.components.selected.findIndex(c => c === component.id);
+          const compIdx = appState.components.selected.findIndex(c => c === id);
           if (compIdx > -1) {
-            newState.components.selected.splice(compIdx, 1);
-            setState(newState);
-            invoke('unselect_component', { id: component.id })
+            invoke('unselect_component', { id })
             .catch((error) => {
               message(error, 'Error');
             });
+            return true;
           }
         }
       } else {
-        // Add change to frontend to avoid input delay
-        const newState = {...state};
-        newState.components.selected.push(component.id);
-        setState(newState);
         // selecting, just enable it, backend will get all dependencies
-        invoke('select_component', { id: component.id })
+        dispatch(setSelected([...appState.components.selected, id]));
+        invoke('select_component', { id })
         .catch((error) => {
           message(error, 'Error');
         });
+        return true;
       }
     } catch (error) {
       message(`${error}`);
     }
+    return false;
   }
-
-  const renderTreeComponent = (component: Component) => {
-    return (
-      <TreeItem key={component.id} itemId={component.real_id} label={
-          <FormControlLabel
-            onChange={(_, checked) => toggleComponent(component, checked)}
-            checked={state.components.selected.includes(component.id)}
-            label={`${component.real_id} - ${readableByteSize(component.install_size)}`}
-            control={<Checkbox/>} />
-          }>
-      </TreeItem>
-    );
-  }
-
-  const renderTreeCategory = (category: Category) => {
-    let checked = false;
-    let indeterminate = false;
-    for (const component of category.components) {
-      if (state.components.selected.includes(component.id)) { checked = true; }
-      if (!state.components.selected.includes(component.id) && checked) {
-        indeterminate = true;
-        break;
-      }
-    }
-    return (
-      <TreeItem key={category.id} itemId={category.real_id} label={
-          <FormControlLabel
-            label={category.real_id}
-            control={
-              <Checkbox checked={checked} indeterminate={indeterminate} />
-            }/>
-          }>
-        {category.subcategories ? category.subcategories.map(renderTreeCategory) : undefined}
-        {category.components ? category.components.map(renderTreeComponent) : undefined}
-      </TreeItem>
-    );
-  }
-
-  const renderComponents = useMemo(() => {
-    return props.list.categories.map(renderTreeCategory);
-  }, [props.list]);
 
   // Event handlers and additional logic here...
 
+  const catRenders = appState.components.categories.map((cat) => renderCategoryNode(cat, 0));
   return (
-    <SimpleTreeView>
-      {renderComponents}
-    </SimpleTreeView>
+    <div>
+      {catRenders.map(c => c.render)}
+    </div>
   );
 }
+
 
 const thresh = 1024;
 
@@ -135,3 +195,15 @@ function readableByteSize(bytes: number) {
 
   return bytes.toFixed(1) + ' ' + units[u];
 }
+
+type ArrowIconProps = {
+  isOpen: boolean;
+  className?: string;
+  onClick?: MouseEventHandler<SVGElement>
+}
+
+const ArrowIcon = ({ isOpen, className, onClick }: ArrowIconProps) => {
+  const baseClass = "arrow";
+  const classes = `${baseClass} ${isOpen ? `${baseClass}--open` : `${baseClass}--closed`} ${className}`;
+  return <IoMdArrowDropright onClick={onClick} className={classes} />;
+};
