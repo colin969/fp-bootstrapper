@@ -10,6 +10,7 @@ import { SetupPage } from './pages/SetupPage';
 import { DownloadState, setDownloadState, setSelected, setState } from './redux/state/stateSlice';
 import { RootState } from './redux/store';
 import { AppState, View } from './types';
+import { FailurePage } from './pages/FailurePage';
 
 function App() {
   const { appState, busy } = useSelector((state: RootState) => state.state);
@@ -73,7 +74,7 @@ function App() {
     <>
     <div className="content">
       {fatalError ? (
-        <h1>FATAL ERROR: {fatalError}</h1>
+        <FailurePage failure={fatalError}/>
       ) : (appState && !appState.fatal_error) ? (
         <>
           {renderView()}

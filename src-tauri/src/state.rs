@@ -89,6 +89,9 @@ pub async fn install_component(comp: &Component, base_url: &str, base_dir: &str,
     // Extract to temp folder
     let mut archive = ZipArchive::new(file)?;
 
+    state.stage = "Extracting".to_owned();
+    window.emit("download_state", state.clone()).unwrap();
+
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
         let outpath = match file.enclosed_name() {
@@ -123,8 +126,7 @@ pub async fn install_component(comp: &Component, base_url: &str, base_dir: &str,
         if path.is_dir() {
             std::fs::create_dir_all(&dest_path)?;
         } else if path.is_file() {
-            let _ = remove_readonly_attr(path); // We don't actually care about the result, because not all files behave well.
-            let _ = remove_readonly_attr(&dest_path); // If it errors, the copy error will present itself soon and bubble up
+            let _ = remove_readonly_attr(&dest_path); // If it fails, the copy error will present itself soon and bubble up later
             std::fs::copy(path, &dest_path)?;
         }
     }
@@ -139,15 +141,12 @@ pub async fn download_file_tmp(url: &str, crc32_hash: &str, window: &Window, sta
     let mut tmp_file = tokio::fs::File::from(tempfile::tempfile()?);
     let mut byte_stream = reqwest::get(url).await?.bytes_stream();
     let mut hasher = Hasher::new();
-    let mut bytes_downloaded = 0;
-    let start_time = Instant::now();
     let mut last_call = Instant::now();
 
     while let Some(item) = byte_stream.next().await {
         let chunk = item?;
-        bytes_downloaded += chunk.len();
+        state.total_downloaded += chunk.len() as u64;
         if last_call.elapsed() >= Duration::from_millis(200) {
-            state.download_rate = (bytes_downloaded as f64) / start_time.elapsed().as_secs_f64();
             window.emit("download_state", state.clone()).unwrap();
             last_call = Instant::now();
         }
@@ -157,11 +156,13 @@ pub async fn download_file_tmp(url: &str, crc32_hash: &str, window: &Window, sta
     }
     tmp_file.flush().await?;
 
-    let calculated_hash = hasher.finalize();
-    let calculated_hash_str = format!("{:08x}", calculated_hash);
-    if calculated_hash_str.to_uppercase() != crc32_hash {
-        let msg = format!("Download failed, hash mismatch: Got {:?} expected {:?} - URL: {:?}", calculated_hash_str.to_uppercase(), crc32_hash, url);
-        return Err(Box::new(crate::Error::GeneralError(msg)));
+    if crc32_hash != "00000000" {
+        let calculated_hash = hasher.finalize();
+        let calculated_hash_str = format!("{:08x}", calculated_hash);
+        if calculated_hash_str.to_uppercase() != crc32_hash {
+            let msg = format!("Download failed, hash mismatch: Got {:?} expected {:?} - URL: {:?}", calculated_hash_str.to_uppercase(), crc32_hash, url);
+            return Err(Box::new(crate::Error::GeneralError(msg)));
+        }
     }
 
     let t = tmp_file.try_into_std();
@@ -205,7 +206,6 @@ impl AppState {
             download_state.total_size = components.iter().map(|c| c.download_size).sum();
 
             for comp in components {
-                download_state.download_rate = 0.0;
                 download_state.component_number += 1;
                 download_state.current = Some(comp.clone());
                 download_state.stage = "Downloading".to_owned();
@@ -213,11 +213,10 @@ impl AppState {
                 match install_component(&comp, &base_url, &base_dir, &window, &mut download_state).await {
                     Ok(_) => (),
                     Err(e) => {
-                        window.emit("fatal_error", e.to_string()).unwrap();
+                        window.emit("fatal_error", format!("During Install of {:?} - {:?}", comp.id, e.to_string())).unwrap();
                         return;
                     },
                 }
-                download_state.total_downloaded += comp.download_size;
             }
             window.emit("installation_finished", 0).unwrap();
         }));
@@ -663,7 +662,6 @@ fn get_all_components<'a>(list: &'a ComponentList) -> Vec<&'a Component> {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct DownloadState {
-    pub download_rate: f64,
     pub total_size: u64,
     pub total_downloaded: u64,
     pub total_components: usize,
@@ -675,7 +673,6 @@ pub struct DownloadState {
 impl Default for DownloadState {
     fn default() -> Self {
         DownloadState {
-            download_rate: 0.0,
             total_size: 0,
             total_downloaded: 0,
             total_components: 0,

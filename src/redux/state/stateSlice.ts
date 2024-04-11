@@ -14,7 +14,6 @@ const initialState: AppState = {
 }
 
 export type DownloadState = {
-  download_rate: number;
   total_size: number,
   total_downloaded: number,
   total_components: number,

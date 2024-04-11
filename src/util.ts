@@ -5,7 +5,7 @@ export function readableByteSize(bytes: number) {
     return bytes + ' B';
   }
 
-  const units = ['KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB'];
+  const units = ['KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
   let u = -1;
   const r = 10**1;
 
